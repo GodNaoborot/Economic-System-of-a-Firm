@@ -100,13 +100,13 @@ def runge_table_system(
     **params
 ) -> pd.DataFrame:
     """
-    Таблица Рунге для СИСТЕМ ОДУ.
+    Таблица Рунге для СИСТЕМ ОДУ (аналог runge_table, но для векторных решений).
 
     Параметры:
     ------------------------------
     bounds : list(float, float) - границы на котором считается решение
     steps : float - шаг сетки
-    y0 : np.ndarray - вектор начальных условий
+    y0 : np.array - вектор начальных условий
     f : callable - функция в правой части
     name : str - название у метода в таблице
     params : dict - параметры для методов решения
@@ -116,40 +116,62 @@ def runge_table_system(
     rows = []
     
     for h in steps:
-        n_h  = int((b - a) / h) + 1
+        n_h   = int((b - a) / h) + 1
+        n_2h  = int((b - a) / (2 * h)) + 1
+        n_4h  = int((b - a) / (4 * h)) + 1
+
         x_h  = np.linspace(a, b, n_h)
-        
-        n_2h = int((b - a) / (2 * h)) + 1
         x_2h = np.linspace(a, b, n_2h)
-        
-        n_4h = int((b - a) / (4 * h)) + 1
         x_4h = np.linspace(a, b, n_4h)
 
         y_h  = method(x_h,  y0, f, **params)
         y_2h = method(x_2h, y0, f, **params)
         y_4h = method(x_4h, y0, f, **params)
 
-        # Выравниваем длины для сравнения
-        min_len_2 = min(len(y_h[::2]), len(y_2h))
-        min_len_4 = min(len(y_2h[::2]), len(y_4h))
+        # Выравниваем длины
+        min_len_h  = min(len(y_h[::2]), len(y_2h))
+        min_len_2h = min(len(y_2h[::2]), len(y_4h))
 
-        eps_h  = np.max(np.abs(y_h[::2][:min_len_2] - y_2h[:min_len_2]))
-        eps_2h = np.max(np.abs(y_2h[::2][:min_len_4] - y_4h[:min_len_4]))
+        # Ошибка по двум шагам (максимум по всем компонентам)
+        eps_h  = np.max(np.abs(y_h[::2][:min_len_h]  - y_2h[:min_len_h]))
+        eps_2h = np.max(np.abs(y_2h[::2][:min_len_2h] - y_4h[:min_len_2h]))
 
         p = np.log2(eps_2h / eps_h) if eps_h > 1e-16 else np.nan
 
         row = [h, eps_h, p]
 
+        # Ошибка относительно точного решения
         if exact_solution is not None:
-            pass
+            y_ex   = exact_solution(x_h, y0, **params)
+            err_exact   = np.max(np.abs(y_h - y_ex))
+            
+            y_ex_2h = exact_solution(x_2h, y0, **params)
+            err_exact_2h = np.max(np.abs(y_2h - y_ex_2h))
+            p_exact = np.log2(err_exact_2h / err_exact) if err_exact > 1e-16 else np.nan
+            
+            row.extend([err_exact, p_exact])
+
+        
+        if etalon_solution is not None:
+            y_et = etalon_solution(x_h, y0, f, **params)
+            err_et = np.max(np.abs(y_h - y_et))
+            row.append(err_et)
 
         rows.append(row)
 
-    df = pd.DataFrame(rows, columns=['Step', 'Eps_h', 'Order_p'])
+
+    columns = ['Eps_h', 'Order_p']
+    if exact_solution is not None:
+        columns.extend(['Eps_h_exact', 'Order_p_exact'])
+    if etalon_solution is not None:
+        columns.append('Eps_h_etalon')
+
+    df = pd.DataFrame(data=rows, columns=['Step'] + columns)
     df = df.set_index('Step')
 
     if name is None:
-        name = method.__name__
-    df.columns = pd.MultiIndex.from_product([[name], df.columns])
+        name = method.__name__ if hasattr(method, '__name__') else "Method"
+
+    df.columns = pd.MultiIndex.from_product([[name], columns])
 
     return df
